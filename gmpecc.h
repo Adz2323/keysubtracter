@@ -15,14 +15,14 @@ struct Elliptic_Curve
     mpz_t n;
 };
 
-extern Elliptic_Curve EC;
-extern Point G;
-extern Point DoublingG[256];
+extern struct Elliptic_Curve EC;
+extern struct Point G;
+extern struct Point DoublingG[256];
 
-void Point_Doubling(Point *P, Point *R);
-void Point_Addition(Point *P, Point *Q, Point *R);
-void Scalar_Multiplication(Point P, Point *R, mpz_t m);
-void Point_Negation(Point *A, Point *S);
-void init_doublingG(Point *P);
+void Point_Doubling(struct Point *P, struct Point *R);
+void Point_Addition(struct Point *P, struct Point *Q, struct Point *R);
+void Scalar_Multiplication(struct Point P, struct Point *R, mpz_t m);
+void Point_Negation(struct Point *A, struct Point *S);
+void init_doublingG(struct Point *P);
 
-#endif // GMPECC_H
+#endif
