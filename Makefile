@@ -1,28 +1,40 @@
+.PHONY: default clean all
+
 CC = gcc
-CXX = g++
-CFLAGS = -O3
-CXXFLAGS = -O3 -std=c++11 -msha
-LIBS = -lgmp -lstdc++
+CFLAGS = -O0 -g
+INCLUDES = -I./xxhash
+LIBS = -lgmp -pthread -lm
 
-C_SRCS = base58/base58.c xxhash/xxhash.c
-CPP_SRCS = bloom.cpp hash/sha256.cpp hash/ripemd160.cpp keysubtracter.cpp util.cpp gmpecc.cpp
-OBJS = $(C_SRCS:.c=.o) $(CPP_SRCS:.cpp=.o)
+default: clean all
 
-# Default target
-default: clean keysubtracter
+all: keysubtracter
 
-# Build target for keysubtracter
-keysubtracter: $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
+keysubtracter: keysubtracter.o gmpecc.o util.o sha256.o base58.o rmd160.o bloom.o xxhash.o
+	$(CC) $(CFLAGS) -o keysubtracter $^ $(LIBS)
 
-# Rule for compiling .c files to .o files
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+keysubtracter.o: keysubtracter.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c keysubtracter.c
 
-# Rule for compiling .cpp files to .o files
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+sha256.o: sha256.c
+	$(CC) $(CFLAGS) -c sha256.c
 
-# Clean up build artifacts
+base58.o: base58/base58.c
+	$(CC) $(CFLAGS) -c base58/base58.c -o base58.o
+
+rmd160.o: rmd160.c
+	$(CC) $(CFLAGS) -c rmd160.c
+
+gmpecc.o: gmpecc.c
+	$(CC) $(CFLAGS) -c gmpecc.c
+
+util.o: util.c
+	$(CC) $(CFLAGS) -c util.c
+
+bloom.o: bloom.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c bloom.c
+
+xxhash.o: xxhash/xxhash.c
+	$(CC) $(CFLAGS) -c xxhash/xxhash.c -o xxhash.o
+
 clean:
-	rm -f $(OBJS) keysubtracter
+	rm -f *.o keysubtracter
