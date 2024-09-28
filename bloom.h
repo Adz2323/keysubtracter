@@ -1,41 +1,41 @@
-#ifndef _BLOOM_H
-#define _BLOOM_H
+#ifndef BLOOM_H
+#define BLOOM_H
 
-#ifdef __cplusplus
-extern "C"
+#include <stddef.h>
+
+#define MAX_HASH_FUNCTIONS 20
+
+typedef struct
 {
-#endif
+    unsigned char *bits;
+    size_t size;
+    size_t num_elements;
+    size_t num_hash_functions;
+    double false_positive_rate;
+} BloomFilter;
 
-#include <stdint.h>
+// Create a new Bloom filter
+BloomFilter *create_bloom_filter(size_t size_in_gb, size_t num_elements);
 
-    struct bloom
-    {
-        uint64_t entries;
-        uint64_t bits;
-        uint64_t bytes;
-        uint8_t hashes;
-        long double error;
-        uint8_t ready;
-        uint8_t major;
-        uint8_t minor;
-        double bpe;
-        uint8_t *bf;
-        void *optimizedBloom;
-    };
+// Free the memory allocated for the Bloom filter
+void free_bloom_filter(BloomFilter *filter);
 
-    int bloom_init2(struct bloom *bloom, uint64_t entries, long double error);
-    int bloom_init(struct bloom *bloom, uint64_t entries, long double error);
-    int bloom_check(const struct bloom *bloom, const void *buffer, int len);
-    int bloom_add(struct bloom *bloom, const void *buffer, int len);
-    void bloom_print(struct bloom *bloom);
-    void bloom_free(struct bloom *bloom);
-    int bloom_reset(struct bloom *bloom);
-    const char *bloom_version();
+// Calculate optimal parameters for the Bloom filter
+void calculate_optimal_parameters(BloomFilter *filter);
 
-    void bloom_add_batch(struct bloom *bloom, const void **items, const int *lengths, int count);
+// Insert an element into the Bloom filter
+void insert(BloomFilter *filter, const char *key);
 
-#ifdef __cplusplus
-}
-#endif
+// Check if an element might be in the Bloom filter
+int contains(BloomFilter *filter, const char *key);
 
-#endif
+// Print Bloom filter options based on size and number of elements
+void print_bloom_filter_options(size_t size_in_gb, size_t num_elements);
+
+// Set a bit in the Bloom filter
+void set_bit(BloomFilter *filter, size_t index);
+
+// Test a bit in the Bloom filter
+int test_bit(BloomFilter *filter, size_t index);
+
+#endif // BLOOM_H
