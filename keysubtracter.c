@@ -2,6 +2,7 @@
 Developed by Luis Alberto
 email: alberto.bsd@gmail.com
 Modified to include threading support and Bloom filter
+Further modified to implement new thread distribution strategy
 */
 
 #include <stdio.h>
@@ -70,7 +71,7 @@ uint64_t N = 0, M;
 mpz_t min_range, max_range, diff, TWO, base_key, sum_key, dst_key;
 gmp_randstate_t state;
 
-// New global variables for threading and Bloom filter
+// Global variables for threading and Bloom filter
 int num_threads = 1;
 pthread_mutex_t output_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t found_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -84,8 +85,9 @@ mpz_t found_subtraction;
 struct ThreadArg
 {
     int thread_id;
-    uint64_t start;
-    uint64_t end;
+    mpz_t start;
+    mpz_t end;
+    int direction; // 1 for forward, -1 for backward
 };
 
 int main(int argc, char **argv)
@@ -211,18 +213,66 @@ int main(int argc, char **argv)
         pthread_t threads[num_threads];
         struct ThreadArg thread_args[num_threads];
 
-        uint64_t chunk_size = M / num_threads;
-        uint64_t remainder = M % num_threads;
+        mpz_t range_size, chunk_size, thread_start;
+        mpz_init(range_size);
+        mpz_init(chunk_size);
+        mpz_init(thread_start);
 
-        for (i = 0; i < num_threads; i++)
+        mpz_sub(range_size, max_range, min_range);
+
+        // If more than 2 threads, divide the remaining range among the additional threads
+        if (num_threads > 2)
         {
-            thread_args[i].thread_id = i;
-            thread_args[i].start = i * chunk_size;
-            thread_args[i].end = (i + 1) * chunk_size;
+            mpz_cdiv_q_ui(chunk_size, range_size, num_threads - 1);
+        }
 
-            if (i == num_threads - 1)
+        for (int i = 0; i < num_threads; i++)
+        {
+            mpz_init(thread_args[i].start);
+            mpz_init(thread_args[i].end);
+            thread_args[i].thread_id = i;
+
+            if (i == 0)
             {
-                thread_args[i].end += remainder;
+                // First thread starts at the beginning
+                mpz_set(thread_args[i].start, min_range);
+                if (num_threads == 2)
+                {
+                    mpz_cdiv_q_ui(thread_args[i].end, range_size, 2);
+                    mpz_add(thread_args[i].end, thread_args[i].end, min_range);
+                }
+                else
+                {
+                    mpz_set(thread_args[i].end, max_range);
+                }
+                thread_args[i].direction = 1;
+            }
+            else if (i == 1)
+            {
+                // Second thread starts at the end, working backwards
+                mpz_set(thread_args[i].end, max_range);
+                if (num_threads == 2)
+                {
+                    mpz_cdiv_q_ui(thread_args[i].start, range_size, 2);
+                    mpz_add(thread_args[i].start, thread_args[i].start, min_range);
+                }
+                else
+                {
+                    mpz_set(thread_args[i].start, min_range);
+                }
+                thread_args[i].direction = -1;
+            }
+            else
+            {
+                // Additional threads spread in the middle, working forwards
+                mpz_mul_ui(thread_start, chunk_size, i - 1);
+                mpz_add(thread_args[i].start, min_range, thread_start);
+                mpz_add(thread_args[i].end, thread_args[i].start, chunk_size);
+                if (mpz_cmp(thread_args[i].end, max_range) > 0)
+                {
+                    mpz_set(thread_args[i].end, max_range);
+                }
+                thread_args[i].direction = 1;
             }
 
             pthread_create(&threads[i], NULL, thread_process, (void *)&thread_args[i]);
@@ -255,6 +305,15 @@ int main(int argc, char **argv)
         mpz_clear(sum_key);
         mpz_clear(found_subtraction);
 
+        for (int i = 0; i < num_threads; i++)
+        {
+            mpz_clear(thread_args[i].start);
+            mpz_clear(thread_args[i].end);
+        }
+        mpz_clear(range_size);
+        mpz_clear(chunk_size);
+        mpz_clear(thread_start);
+
         if (OUTPUT != stdout)
         {
             fclose(OUTPUT);
@@ -274,12 +333,12 @@ int main(int argc, char **argv)
 void *thread_process(void *arg)
 {
     struct ThreadArg *thread_arg = (struct ThreadArg *)arg;
-    uint64_t i;
-    mpz_t thread_base_key, thread_sum_key;
+    mpz_t thread_base_key, thread_sum_key, current;
     struct Point thread_base_publickey, thread_sum_publickey, thread_negated_publickey, thread_dst_publickey;
 
     mpz_init(thread_base_key);
     mpz_init(thread_sum_key);
+    mpz_init(current);
     mpz_init(thread_base_publickey.x);
     mpz_init(thread_base_publickey.y);
     mpz_init(thread_sum_publickey.x);
@@ -297,7 +356,9 @@ void *thread_process(void *arg)
         gmp_randinit_mt(thread_state);
         gmp_randseed_ui(thread_state, ((int)clock()) + ((int)time(NULL)) + thread_arg->thread_id);
 
-        for (i = thread_arg->start; i < thread_arg->end && !found_match; i++)
+        for (mpz_set(current, thread_arg->start);
+             mpz_cmp(current, thread_arg->end) < 0 && !found_match;
+             mpz_add_ui(current, current, 1))
         {
             mpz_urandomm(thread_base_key, thread_state, diff);
             Scalar_Multiplication(G, &thread_base_publickey, thread_base_key);
@@ -320,7 +381,7 @@ void *thread_process(void *arg)
             }
 
             pthread_mutex_lock(&output_mutex);
-            printf("\r%s - %s", thread_publickey, mpz_get_str(NULL, 10, thread_base_key));
+            gmp_printf("\r%s - %Zd", thread_publickey, thread_base_key);
             fflush(stdout);
             pthread_mutex_unlock(&output_mutex);
 
@@ -329,7 +390,6 @@ void *thread_process(void *arg)
 
             Point_Addition(&thread_negated_publickey, &target_publickey, &thread_dst_publickey);
             generate_strpublickey(&thread_dst_publickey, FLAG_LOOK == 0, thread_publickey);
-
             if (contains(bloom_filter, thread_publickey))
             {
                 pthread_mutex_lock(&found_mutex);
@@ -344,7 +404,7 @@ void *thread_process(void *arg)
             }
 
             pthread_mutex_lock(&output_mutex);
-            printf("\r%s - %s", thread_publickey, mpz_get_str(NULL, 10, thread_base_key));
+            gmp_printf("\r%s - %Zd", thread_publickey, thread_base_key);
             fflush(stdout);
             pthread_mutex_unlock(&output_mutex);
         }
@@ -354,11 +414,13 @@ void *thread_process(void *arg)
     else
     {
         mpz_cdiv_q_ui(thread_base_key, diff, M);
-        mpz_mul_ui(thread_sum_key, thread_base_key, thread_arg->start);
-        Scalar_Multiplication(G, &thread_sum_publickey, thread_sum_key);
+        mpz_set(thread_sum_key, thread_arg->start);
+        mpz_set(current, thread_arg->start);
 
-        for (i = thread_arg->start; i < thread_arg->end && !found_match; i++)
+        while ((thread_arg->direction == 1 && mpz_cmp(current, thread_arg->end) < 0) ||
+               (thread_arg->direction == -1 && mpz_cmp(current, thread_arg->end) > 0))
         {
+            Scalar_Multiplication(G, &thread_sum_publickey, thread_sum_key);
             Point_Negation(&thread_sum_publickey, &thread_negated_publickey);
             Point_Addition(&thread_sum_publickey, &target_publickey, &thread_dst_publickey);
 
@@ -378,7 +440,7 @@ void *thread_process(void *arg)
             }
 
             pthread_mutex_lock(&output_mutex);
-            printf("\r%s - %s", thread_publickey, mpz_get_str(NULL, 10, thread_sum_key));
+            gmp_printf("\r%s - %Zd", thread_publickey, thread_sum_key);
             fflush(stdout);
             pthread_mutex_unlock(&output_mutex);
 
@@ -402,19 +464,27 @@ void *thread_process(void *arg)
             }
 
             pthread_mutex_lock(&output_mutex);
-            printf("\r%s - %s", thread_publickey, mpz_get_str(NULL, 10, thread_sum_key));
+            gmp_printf("\r%s - %Zd", thread_publickey, thread_sum_key);
             fflush(stdout);
             pthread_mutex_unlock(&output_mutex);
 
-            Point_Addition(&thread_sum_publickey, &thread_base_publickey, &thread_dst_publickey);
-            mpz_set(thread_sum_publickey.x, thread_dst_publickey.x);
-            mpz_set(thread_sum_publickey.y, thread_dst_publickey.y);
-            mpz_add(thread_sum_key, thread_sum_key, thread_base_key);
+            // Update the sum_key and current based on direction
+            if (thread_arg->direction == 1)
+            {
+                mpz_add(thread_sum_key, thread_sum_key, thread_base_key);
+                mpz_add_ui(current, current, 1);
+            }
+            else
+            {
+                mpz_sub(thread_sum_key, thread_sum_key, thread_base_key);
+                mpz_sub_ui(current, current, 1);
+            }
         }
     }
 
     mpz_clear(thread_base_key);
     mpz_clear(thread_sum_key);
+    mpz_clear(current);
     mpz_clear(thread_base_publickey.x);
     mpz_clear(thread_base_publickey.y);
     mpz_clear(thread_sum_publickey.x);
